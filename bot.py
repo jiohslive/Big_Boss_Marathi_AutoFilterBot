@@ -1,10 +1,8 @@
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from telegram import (
-    Update, InlineKeyboardMarkup, InlineKeyboardButton
-)
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -41,6 +39,17 @@ def get_show():
         })
         show = movies_col.find_one({"show": SHOW_NAME})
     return show
+
+# ================= FILE ID LOGGER =================
+async def file_id_logger(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.video:
+        fid = update.message.video.file_id
+        await update.message.reply_text(f"🎥 Video file_id:\n\n{fid}")
+    elif update.message.document:
+        fid = update.message.document.file_id
+        await update.message.reply_text(f"📄 Document file_id:\n\n{fid}")
+    else:
+        await update.message.reply_text("❌ Video/Document send kar")
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,10 +107,10 @@ async def episode_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["files_map"] = {str(i): f["file_id"] for i, f in enumerate(files)}
 
-    buttons = [
-        [InlineKeyboardButton(f["quality"], callback_data=f"send|{i}")]
-        for i, f in enumerate(files)
-    ]
+    buttons = []
+    for i, f in enumerate(files):
+        label = f.get("quality", "File")
+        buttons.append([InlineKeyboardButton(label, callback_data=f"send|{i}")])
 
     await q.message.reply_text(
         f"🎬 *S6E{ep}* – Choose quality:",
@@ -117,7 +126,7 @@ async def send_file_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_id = context.user_data.get("files_map", {}).get(key)
 
     if not file_id:
-        await q.message.reply_text("❌ File expired. Open episode again.")
+        await q.message.reply_text("❌ File expired. Episode पुन्हा open कर.")
         return
 
     await context.bot.send_chat_action(q.message.chat_id, ChatAction.UPLOAD_DOCUMENT)
@@ -159,11 +168,8 @@ async def admin_add_ep(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.callback_query.answer()
-    context.user_data["add_mode"] = True
-
     await update.callback_query.message.reply_text(
-        "➕ Send episode like:\n\n"
-        "`/add 105|1080p|<file_id>`",
+        "➕ Send episode like:\n\n`/add 105|1080p|<file_id>`",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -175,7 +181,6 @@ async def add_episode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, data = update.message.text.split(" ", 1)
         ep, quality, file_id = data.split("|")
 
-        show = get_show()
         movies_col.update_one(
             {"show": SHOW_NAME},
             {"$push": {f"seasons.6.episodes.{ep}": {
@@ -186,7 +191,7 @@ async def add_episode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(f"✅ Added S6E{ep} [{quality}]")
 
-    except Exception as e:
+    except:
         await update.message.reply_text("❌ Format error.\nUse: /add 105|1080p|<file_id>")
 
 # ================= BROADCAST =================
@@ -229,6 +234,9 @@ def main():
     app.add_handler(CallbackQueryHandler(send_file_cb, pattern="^send\\|"))
     app.add_handler(CallbackQueryHandler(admin_add_ep, pattern="^admin_add_ep$"))
     app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
+
+    # File ID logger (admin ला file send केल्यावर id देईल)
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL, file_id_logger))
 
     app.add_error_handler(error_handler)
 
