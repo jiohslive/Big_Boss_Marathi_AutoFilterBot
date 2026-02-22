@@ -78,7 +78,7 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_file_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    _, file_id = q.data.split("|")
+    _, file_id = q.data.split("|",1)
     await context.bot.send_chat_action(q.message.chat_id, ChatAction.UPLOAD_DOCUMENT)
     await context.bot.send_document(q.message.chat_id, file_id)
 
@@ -88,7 +88,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("add", add_movie))
     app.add_handler(CallbackQueryHandler(check_join_cb, pattern="check_join"))
-    app.add_handler(CallbackQueryHandler(send_file_cb, pattern="send\\|"))
+    app.add_handler(CallbackQueryHandler(send_file_cb, pattern=r"^send\|"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_movie))
 
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), lambda u, c: file_id_logger(u, c, ADMIN_ID)))
