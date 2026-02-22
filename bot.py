@@ -7,6 +7,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
+from utils.file_id_logger import file_id_logger
 from db import movies_col, users_col
 from admin import add_movie
 
@@ -89,6 +90,8 @@ def main():
     app.add_handler(CallbackQueryHandler(check_join_cb, pattern="check_join"))
     app.add_handler(CallbackQueryHandler(send_file_cb, pattern="send\\|"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_movie))
+
+    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), lambda u, c: file_id_logger(u, c, ADMIN_ID)))
 
     print("🤖 Bot running...")
     app.run_polling()
