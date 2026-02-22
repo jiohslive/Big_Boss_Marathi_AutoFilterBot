@@ -1,28 +1,33 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from db import movies_col
-from config import ADMIN_ID
 
 async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("❌ Only admin can use this.")
+    if not context.args:
+        await update.message.reply_text("Use: /add <title>|<keywords comma>|<quality>|<file_id>")
+        return
 
-    if len(context.args) < 4:
-        return await update.message.reply_text(
-            "Usage:\n/add <name> <episode> <quality> <link>\n"
-            "Example:\n/add kgf 1 720p https://t.me/yourchannel/12"
-        )
+    try:
+        data = " ".join(context.args)
+        title, keywords, quality, file_id = data.split("|")
 
-    name = context.args[0].lower()
-    episode = context.args[1]
-    quality = context.args[2]
-    link = context.args[3]
+        keywords_list = [k.strip().lower() for k in keywords.split(",")]
 
-    movies_col.insert_one({
-        "name": name,
-        "episode": episode,
-        "quality": quality,
-        "link": link
-    })
+        movie = movies_col.find_one({"title": title.strip()})
 
-    await update.message.reply_text(f"✅ Added: {name} | Ep {episode} | {quality}")
+        if movie:
+            movies_col.update_one(
+                {"_id": movie["_id"]},
+                {"$push": {"files": {"quality": quality.strip(), "file_id": file_id.strip()}}}
+            )
+        else:
+            movies_col.insert_one({
+                "title": title.strip(),
+                "keywords": keywords_list,
+                "files": [{"quality": quality.strip(), "file_id": file_id.strip()}]
+            })
+
+        await update.message.reply_text("✅ Movie/File added successfully!")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
