@@ -16,6 +16,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 CHANNEL_USERNAME = "@RivoBots"  # change this
 
+# --- GLOBAL TEMP MAP (chat wise) ---
+FILE_MAP = {}  # { chat_id: { "1": "FILE_ID", "2": "FILE_ID2" } }
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Send movie/series name to search.")
 
@@ -54,22 +57,30 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     results = movies_col.find({"keywords": {"$regex": re.escape(query), "$options": "i"}})
 
-    text = f"Results for {query}\n\n"
+    text = f"Results for: {query}\n\n"
     buttons = []
 
     found = False
+    FILE_MAP[update.effective_chat.id] = {}
+    idx = 1
+
     for m in results:
-        found = True
         for f in m["files"]:
-            text += f"🍿 {f['quality']} – {m['title']}\n"
-            buttons.append([InlineKeyboardButton(f"{f['quality']}", callback_data=f"send|{f['file_id']}")])
+            found = True
+            text += f"🍿 {m['title']} – {f['quality']}\n"
+            short_id = str(idx)
+            FILE_MAP[update.effective_chat.id][short_id] = f["file_id"]
+
+            buttons.append([
+                InlineKeyboardButton(f"{f['quality']}", callback_data=f"send|{short_id}")
+            ])
+            idx += 1
 
     if not found:
         await searching_msg.edit_text("❌ No results found. Check spelling.")
     else:
         await searching_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-    await asyncio.sleep(5)
     try:
         await update.message.delete()
     except:
@@ -78,9 +89,18 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_file_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    _, file_id = q.data.split("|",1)
-    await context.bot.send_chat_action(q.message.chat_id, ChatAction.UPLOAD_DOCUMENT)
-    await context.bot.send_document(q.message.chat_id, file_id)
+
+    _, short_id = q.data.split("|", 1)
+    chat_id = q.message.chat_id
+
+    file_id = FILE_MAP.get(chat_id, {}).get(short_id)
+
+    if not file_id:
+        await q.message.reply_text("❌ File expired. Search again.")
+        return
+
+    await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
+    await context.bot.send_document(chat_id, file_id)
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
