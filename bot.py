@@ -155,14 +155,13 @@ async def daily_post(context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== MAIN ==========
-def main():
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .job_queue(True)   # ✅ FIX
-        .build()
-    )
+from telegram.ext import Application, ApplicationBuilder
+from telegram.ext import JobQueue
 
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", lambda u, c: admin_panel(u, c, ADMIN_ID)))
     app.add_handler(CommandHandler("add", lambda u, c: add_episode_cmd(u, c, ADMIN_ID)))
@@ -178,7 +177,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_suggest))
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), lambda u, c: file_id_logger(u, c, ADMIN_ID)))
 
-    app.job_queue.run_daily(daily_post, time=time(hour=21, minute=0))  # 9 PM
+    # ✅ JobQueue safe setup
+    if app.job_queue:
+        app.job_queue.run_daily(daily_post, time=time(hour=21, minute=0))  # 9 PM
 
     print("🤖 Bot running...")
     app.run_polling()
