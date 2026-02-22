@@ -1,31 +1,36 @@
-import os
-import asyncio
-import re
+import os, asyncio, re
+from datetime import time
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
-from utils.file_id_logger import file_id_logger
+
 from db import movies_col, users_col
-from admin import add_movie
+from utils.file_id_logger import file_id_logger
+from admin import admin_panel, admin_cb, add_episode_cmd, remove_episode_cmd
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+CHANNEL_USERNAME = "@RivoBots"
 
-CHANNEL_USERNAME = "@RivoBots"  # change this
-
-# --- GLOBAL TEMP MAP (chat wise) ---
-FILE_MAP = {}  # { chat_id: { "1": "FILE_ID", "2": "FILE_ID2" } }
-
+# ========== BASIC ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Send movie/series name to search.")
+    users_col.update_one(
+        {"user_id": update.effective_user.id},
+        {"$set": {"user_id": update.effective_user.id}},
+        upsert=True
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📂 Bigg Boss Marathi S6", callback_data="cat|s6")]
+    ])
+    await update.message.reply_text("👋 Welcome! Choose category:", reply_markup=kb)
 
 async def is_joined(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        member = await context.bot.get_chat_member(CHANNEL_USERNAME, update.effective_user.id)
-        return member.status in ["member", "administrator", "creator"]
+        m = await context.bot.get_chat_member(CHANNEL_USERNAME, update.effective_user.id)
+        return m.status in ["member", "administrator", "creator"]
     except:
         return False
 
@@ -34,84 +39,141 @@ async def force_join(update: Update):
         [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
         [InlineKeyboardButton("🔁 Check Joined", callback_data="check_join")]
     ])
-    await update.message.reply_text("❌ First join our update channel!", reply_markup=kb)
+    await update.message.reply_text("❌ First join channel!", reply_markup=kb)
 
 async def check_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     if await is_joined(update, context):
-        await q.message.edit_text("✅ Joined! Now send movie name.")
+        await q.message.edit_text("✅ Joined! Now search episode number.")
     else:
         await q.message.edit_text("❌ Not joined yet!", reply_markup=q.message.reply_markup)
 
-async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========== CATEGORY + PAGINATION ==========
+async def category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
     if not await is_joined(update, context):
-        await force_join(update)
+        await force_join(q.message)
         return
 
-    query = update.message.text.lower()
-    searching_msg = await update.message.reply_text(f"🔎 Searching: {query}")
-    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    show = movies_col.find_one({"show": "Bigg Boss Marathi"})
+    eps = sorted(show["seasons"]["6"]["episodes"].keys(), key=int)
+    context.user_data["eps"] = eps
+    context.user_data["page"] = 0
 
-    await asyncio.sleep(1.5)
+    await show_page(q.message, context)
 
-    results = movies_col.find({"keywords": {"$regex": re.escape(query), "$options": "i"}})
+async def show_page(msg, context):
+    eps = context.user_data["eps"]
+    page = context.user_data["page"]
 
-    text = f"Results for: {query}\n\n"
-    buttons = []
+    per_page = 10
+    start = page * per_page
+    chunk = eps[start:start+per_page]
 
-    found = False
-    FILE_MAP[update.effective_chat.id] = {}
-    idx = 1
+    buttons = [[InlineKeyboardButton(f"S6E{e}", callback_data=f"ep|{e}")] for e in chunk]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅ Prev", callback_data="nav|prev"))
+    if start + per_page < len(eps):
+        nav.append(InlineKeyboardButton("Next ➡", callback_data="nav|next"))
+    if nav:
+        buttons.append(nav)
 
-    for m in results:
-        for f in m["files"]:
-            found = True
-            text += f"🍿 {m['title']} – {f['quality']}\n"
-            short_id = str(idx)
-            FILE_MAP[update.effective_chat.id][short_id] = f["file_id"]
+    await msg.edit_text("📂 Bigg Boss Marathi Season 6 Episodes:", reply_markup=InlineKeyboardMarkup(buttons))
 
-            buttons.append([
-                InlineKeyboardButton(f"{f['quality']}", callback_data=f"send|{short_id}")
-            ])
-            idx += 1
+async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-    if not found:
-        await searching_msg.edit_text("❌ No results found. Check spelling.")
+    if q.data.endswith("next"):
+        context.user_data["page"] += 1
     else:
-        await searching_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+        context.user_data["page"] -= 1
 
-    try:
-        await update.message.delete()
-    except:
-        pass
+    await show_page(q.message, context)
+
+# ========== EPISODE SEND ==========
+async def episode_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    ep = q.data.split("|")[1]
+
+    show = movies_col.find_one({"show": "Bigg Boss Marathi"})
+    files = show["seasons"]["6"]["episodes"].get(ep)
+
+    buttons = [
+        [InlineKeyboardButton(f["quality"], callback_data=f"send|{f['file_id']}")]
+        for f in files
+    ]
+    await q.message.reply_text(f"🎬 S6E{ep} – Choose quality:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def send_file_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    file_id = q.data.split("|")[1]
 
-    _, short_id = q.data.split("|", 1)
-    chat_id = q.message.chat_id
+    await context.bot.send_chat_action(q.message.chat_id, ChatAction.UPLOAD_DOCUMENT)
+    await context.bot.send_document(q.message.chat_id, file_id)
 
-    file_id = FILE_MAP.get(chat_id, {}).get(short_id)
-
-    if not file_id:
-        await q.message.reply_text("❌ File expired. Search again.")
+# ========== AUTO SUGGEST ==========
+async def auto_suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_joined(update, context):
+        await force_join(update)
         return
 
-    await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
-    await context.bot.send_document(chat_id, file_id)
+    text = update.message.text.strip()
+    if not text.isdigit():
+        return
 
+    show = movies_col.find_one({"show": "Bigg Boss Marathi"})
+    eps = show["seasons"]["6"]["episodes"].keys()
+    sug = [e for e in eps if e.startswith(text)]
+
+    if not sug:
+        return
+
+    buttons = [[InlineKeyboardButton(f"S6E{e}", callback_data=f"ep|{e}")] for e in sug[:10]]
+    await update.message.reply_text("Did you mean 👇", reply_markup=InlineKeyboardMarkup(buttons))
+
+# ========== DAILY AUTO POST ==========
+async def daily_post(context: ContextTypes.DEFAULT_TYPE):
+    show = movies_col.find_one({"show": "Bigg Boss Marathi"})
+    eps = show["seasons"]["6"]["episodes"]
+    if not eps:
+        return
+
+    last_ep = sorted(eps.keys(), key=int)[-1]
+    file_id = eps[last_ep][0]["file_id"]
+
+    await context.bot.send_document(
+        chat_id=CHANNEL_USERNAME,
+        document=file_id,
+        caption=f"🔥 Today Episode: Bigg Boss Marathi S6E{last_ep}"
+    )
+
+# ========== MAIN ==========
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add_movie))
-    app.add_handler(CallbackQueryHandler(check_join_cb, pattern="check_join"))
-    app.add_handler(CallbackQueryHandler(send_file_cb, pattern=r"^send\|"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_movie))
+    app.add_handler(CommandHandler("admin", lambda u, c: admin_panel(u, c, ADMIN_ID)))
+    app.add_handler(CommandHandler("add", lambda u, c: add_episode_cmd(u, c, ADMIN_ID)))
+    app.add_handler(CommandHandler("remove", lambda u, c: remove_episode_cmd(u, c, ADMIN_ID)))
 
+    app.add_handler(CallbackQueryHandler(check_join_cb, pattern="check_join"))
+    app.add_handler(CallbackQueryHandler(category_cb, pattern=r"^cat\|"))
+    app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav\|"))
+    app.add_handler(CallbackQueryHandler(episode_cb, pattern=r"^ep\|"))
+    app.add_handler(CallbackQueryHandler(send_file_cb, pattern=r"^send\|"))
+    app.add_handler(CallbackQueryHandler(lambda u, c: admin_cb(u, c, ADMIN_ID), pattern=r"^admin\|"))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_suggest))
     app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), lambda u, c: file_id_logger(u, c, ADMIN_ID)))
+
+    app.job_queue.run_daily(daily_post, time=time(hour=21, minute=0))  # 9 PM
 
     print("🤖 Bot running...")
     app.run_polling()
