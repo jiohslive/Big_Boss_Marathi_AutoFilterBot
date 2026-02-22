@@ -34,12 +34,12 @@ async def is_joined(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         return False
 
-async def force_join(update: Update):
+async def force_join(msg):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")],
         [InlineKeyboardButton("🔁 Check Joined", callback_data="check_join")]
     ])
-    await update.message.reply_text("❌ First join channel!", reply_markup=kb)
+    await msg.reply_text("❌ First join channel!", reply_markup=kb)
 
 async def check_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -121,7 +121,7 @@ async def send_file_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== AUTO SUGGEST ==========
 async def auto_suggest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_joined(update, context):
-        await force_join(update)
+        await force_join(update.message)
         return
 
     text = update.message.text.strip()
@@ -156,7 +156,12 @@ async def daily_post(context: ContextTypes.DEFAULT_TYPE):
 
 # ========== MAIN ==========
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .job_queue(True)   # ✅ FIX
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", lambda u, c: admin_panel(u, c, ADMIN_ID)))
